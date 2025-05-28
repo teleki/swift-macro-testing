@@ -53,7 +53,8 @@ public struct AddAsyncMacro: PeerMacro {
       let completionHandlerParameterAttribute = funcDecl.signature.parameterClause.parameters.last?
         .type.as(AttributedTypeSyntax.self),
       let completionHandlerParameter = completionHandlerParameterAttribute.baseType.as(
-        FunctionTypeSyntax.self)
+        FunctionTypeSyntax.self
+      )
     else {
       throw CustomError.message(
         "@addAsync requires an function that has a completion handler as last parameter"
@@ -70,12 +71,28 @@ public struct AddAsyncMacro: PeerMacro {
     }
 
     let returnType = completionHandlerParameter.parameters.first?.type
-
     let isResultReturn = returnType?.children(viewMode: .all).first?.description == "Result"
-    let successReturnType =
-      isResultReturn
-      ? returnType!.as(IdentifierTypeSyntax.self)!.genericArgumentClause?.arguments.first!.argument
-      : returnType
+
+    let successReturnType: TypeSyntax? = {
+      guard isResultReturn
+      else { return returnType }
+
+      let successType = returnType!.as(IdentifierTypeSyntax.self)!.genericArgumentClause?.arguments
+        .first!
+        .argument
+      #if canImport(SwiftSyntax601)
+        switch successType {
+        case .none:
+          return nil
+        case .type(let syntax):
+          return syntax
+        default:
+          return nil
+        }
+      #else
+        return successType
+      #endif
+    }()
 
     // Remove completionHandler and comma from the previous parameter
     var newParameterList = funcDecl.signature.parameterClause.parameters
@@ -135,13 +152,15 @@ public struct AddAsyncMacro: PeerMacro {
     funcDecl.signature.effectSpecifiers = FunctionEffectSpecifiersSyntax(
       leadingTrivia: .space,
       asyncSpecifier: .keyword(.async),
-      throwsSpecifier: isResultReturn ? .keyword(.throws) : nil
+      throwsClause: isResultReturn ? ThrowsClauseSyntax(throwsSpecifier: .keyword(.throws)) : nil
     )
 
     // add result type
     if let successReturnType {
       funcDecl.signature.returnClause = ReturnClauseSyntax(
-        leadingTrivia: .space, type: successReturnType.with(\.leadingTrivia, .space))
+        leadingTrivia: .space,
+        type: successReturnType.with(\.leadingTrivia, .space)
+      )
     } else {
       funcDecl.signature.returnClause = nil
     }
